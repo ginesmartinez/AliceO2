@@ -11,6 +11,7 @@
 #include "TPCSimulation/Detector.h"
 #include "TPCSimulation/Point.h"
 #include "TPCSimulation/Constants.h"
+#include <Configuration/SimConfig.h>
 
 #include "SimulationDataFormat/DetectorList.h"
 #include "SimulationDataFormat/Stack.h"
@@ -125,6 +126,10 @@ void Detector::Initialize()
 void Detector::SetSpecialPhysicsCuts()
 {
   FairRun* fRun = FairRun::Instance();
+
+  if(! o2::conf::SimConfig::Instance().isWithPhysicsProcs() ){
+    return;
+  }
   
   //check for GEANT3, else abort
   if (strcmp(fRun->GetName(),"TGeant3") == 0) {
