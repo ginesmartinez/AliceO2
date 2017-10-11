@@ -16,20 +16,17 @@
 #define ALICEO2_DATA_STACK_H_
 
 #include "FairGenericStack.h"
+#include "SimulationDataFormat/MCTrack.h"
 
 #include "Rtypes.h"
 #include "TMCProcess.h"
+#include "TParticle.h"
 
 #include <map>
 #include <stack>
 #include <utility>
 
-class TClonesArray;
-
-class TParticle;
-
 class TRefArray;
-
 class FairLogger;
 
 namespace o2 {
@@ -133,9 +130,6 @@ class Stack : public FairGenericStack
     /// Declared in TVirtualMCStack
     Int_t GetCurrentParentTrackNumber() const override;
 
-    /// Add a TParticle to the mParticles array
-    virtual void AddParticle(TParticle *part);
-
     /// Fill the MCTrack output array, applying filter criteria
     void FillTrackArray() override;
 
@@ -191,10 +185,9 @@ class Stack : public FairGenericStack
     /// Accessors
     TParticle *GetParticle(Int_t trackId) const;
 
-    TClonesArray *GetListOfParticles() override
-    {
-      return mParticles;
-    }
+    TClonesArray *GetListOfParticles() override;
+
+    std::vector<TParticle> const& getParticles() const { return mParticles; }
 
     /// Clone for worker (used in MT mode only)
     FairGenericStack *CloneStack() const override;
@@ -207,11 +200,11 @@ class Stack : public FairGenericStack
 
     /// Array of TParticles (contains all TParticles put into or created
     /// by the transport
-    TClonesArray *mParticles; //!
-
-    /// Array of FairMCTracks containg the tracks written to the output
-    TClonesArray *mTracks;
-
+    std::vector<TParticle> mParticles; //!
+    
+    /// vector of reducded tracks written to the output
+    std::vector<o2::MCTrack>* mTracks;
+    
     /// STL map from particle index to storage flag
     std::map<Int_t, Bool_t> mStoreMap;                //!
     std::map<Int_t, Bool_t>::iterator mStoreIterator; //!
@@ -219,7 +212,8 @@ class Stack : public FairGenericStack
     /// STL map from particle index to track index
     std::map<Int_t, Int_t> mIndexMap;                //!
     std::map<Int_t, Int_t>::iterator mIndexIterator; //!
-
+    std::vector<Int_t> mIndexVector; //!
+    
     /// STL map from track index and detector ID to number of MCPoints
     std::map<std::pair<Int_t, Int_t>, Int_t> mPointsMap; //!
 

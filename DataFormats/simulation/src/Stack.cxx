@@ -21,7 +21,6 @@
 #include "SimulationDataFormat/BaseHits.h"
 #include "FairGenericRootManager.h"  // for FairGenericRootManager
 
-#include "TClonesArray.h"     // for TClonesArray
 #include "TIterator.h"        // for TIterator
 #include "TLorentzVector.h"   // for TLorentzVector
 #include "TParticle.h"        // for TParticle
@@ -37,11 +36,12 @@ using namespace o2::Data;
 Stack::Stack(Int_t size)
   : FairGenericStack(),
     mStack(),
-    mParticles(new TClonesArray("TParticle", size)),
-    mTracks(new TClonesArray("MCTrack", size)),
+    mParticles(),
+    mTracks(new std::vector<o2::MCTrack>(size)),
     mStoreMap(),
     mStoreIterator(),
     mIndexMap(),
+    mIndexVector(),
     mIndexIterator(),
     mPointsMap(),
     mIndexOfCurrentTrack(-1),
@@ -61,11 +61,12 @@ Stack::Stack(Int_t size)
 Stack::Stack(const Stack &rhs)
   : FairGenericStack(rhs),
     mStack(),
-    mParticles(nullptr),
+    mParticles(),
     mTracks(nullptr),
     mStoreMap(),
     mStoreIterator(),
     mIndexMap(),
+    mIndexVector(),
     mIndexIterator(),
     mPointsMap(),
     mIndexOfCurrentTrack(-1),
@@ -79,20 +80,15 @@ Stack::Stack(const Stack &rhs)
     mEnergyCut(rhs.mEnergyCut),
     mLogger(FairLogger::GetLogger())
 {
-  mParticles = new TClonesArray("TParticle", rhs.mParticles->GetSize());
-  mTracks = new TClonesArray("MCTrack", rhs.mTracks->GetSize());
+  mParticles = rhs.mParticles;
+  mTracks = new std::vector<MCTrack>(rhs.mTracks->size());
 
   // LOG(INFO) << "Stack::Stack(rhs) " << this << " mTracks " << mTracks << std::endl;
 }
 
 Stack::~Stack()
 {
-  if (mParticles) {
-    mParticles->Delete();
-    delete mParticles;
-  }
   if (mTracks) {
-    mTracks->Delete();
     delete mTracks;
   }
 }
@@ -106,8 +102,8 @@ Stack &Stack::operator=(const Stack &rhs)
   FairGenericStack::operator=(rhs);
 
   // assignment operator
-  mParticles = new TClonesArray("TParticle", rhs.mParticles->GetSize());
-  mTracks = new TClonesArray("MCTrack", rhs.mTracks->GetSize());
+  mParticles = rhs.mParticles;
+  mTracks = new std::vector<MCTrack>(rhs.mTracks->size());
   mIndexOfCurrentTrack = -1;
   mNumberOfPrimaryParticles = 0;
   mNumberOfEntriesInParticles = 0;
@@ -134,20 +130,18 @@ void Stack::PushTrack(Int_t toBeDone, Int_t parentId, Int_t pdgCode, Double_t px
                       Double_t vx, Double_t vy, Double_t vz, Double_t time, Double_t polx, Double_t poly, Double_t polz,
                       TMCProcess proc, Int_t &ntr, Double_t weight, Int_t is, Int_t secondparentID)
 {
-
-  // Get TParticle array
-  TClonesArray &partArray = *mParticles;
-
   // Create new TParticle and add it to the TParticle array
   Int_t trackId = mNumberOfEntriesInParticles;
   Int_t nPoints = 0;
   Int_t daughter1Id = -1;
   Int_t daughter2Id = -1;
-  auto *particle = new(partArray[mNumberOfEntriesInParticles++])
-    TParticle(pdgCode, trackId, parentId, nPoints, daughter1Id, daughter2Id, px, py, pz, e, vx, vy, vz, time);
-  particle->SetPolarisation(polx, poly, polz);
-  particle->SetWeight(weight);
-  particle->SetUniqueID(proc);
+  mParticles.emplace_back(pdgCode, trackId, parentId, nPoints, daughter1Id, daughter2Id, px, py, pz, e, vx, vy, vz, time);
+  auto& particle = mParticles.back();
+  mNumberOfEntriesInParticles = mParticles.size();
+  
+  particle.SetPolarisation(polx, poly, polz);
+  particle.SetWeight(weight);
+  particle.SetUniqueID(proc);
 
   // Increment counter
   if (parentId < 0) {
@@ -159,7 +153,7 @@ void Stack::PushTrack(Int_t toBeDone, Int_t parentId, Int_t pdgCode, Double_t px
 
   // Push particle on the stack if toBeDone is set
   if (toBeDone == 1) {
-    mStack.push(particle);
+    mStack.push(&particle);
   }
 }
 
@@ -203,7 +197,7 @@ TParticle *Stack::PopPrimaryForTracking(Int_t iPrim)
 
   // Return the iPrim-th TParticle from the fParticle array. This should be
   // a primary.
-  TParticle *part = (TParticle *) mParticles->At(iPrim);
+  TParticle *part = &mParticles[iPrim];
   if (!(part->GetMother(0) < 0)) {
     if (mLogger) {
       mLogger->Fatal(MESSAGE_ORIGIN, "Stack:: Not a primary track! %i ", iPrim);
@@ -226,15 +220,6 @@ TParticle *Stack::GetCurrentTrack() const
   return currentPart;
 }
 
-void Stack::AddParticle(TParticle *oldPart)
-{
-  TClonesArray &array = *mParticles;
-  auto *newPart = new(array[mIndex]) TParticle(*oldPart);
-  newPart->SetWeight(oldPart->GetWeight());
-  newPart->SetUniqueID(oldPart->GetUniqueID());
-  mIndex++;
-}
-
 void Stack::FillTrackArray()
 {
   if (mLogger) {
@@ -245,6 +230,8 @@ void Stack::FillTrackArray()
 
   // Reset index map and number of output tracks
   mIndexMap.clear();
+  mIndexVector.clear();
+  mIndexVector.resize(mNumberOfEntriesInParticles, -2);
   mNumberOfEntriesInTracks = 0;
 
   // Check tracks for selection criteria
@@ -263,12 +250,15 @@ void Stack::FillTrackArray()
     Bool_t store = (*mStoreIterator).second;
 
     if (store) {
-      auto *track = new((*mTracks)[mNumberOfEntriesInTracks]) MCTrack(GetParticle(iPart));
+      mTracks->emplace_back(GetParticle(iPart));
+      auto& track = mTracks->back();			    
       mIndexMap[iPart] = mNumberOfEntriesInTracks;
+      mIndexVector[iPart] = mNumberOfEntriesInTracks;
+
       // Set the number of points in the detectors for this track
       for (Int_t iDet = o2::Base::DetID::First; iDet < o2::Base::DetID::nDetectors; iDet++) {
         pair<Int_t, Int_t> a(iPart, iDet);
-        track->setNumberOfPoints(iDet, mPointsMap[a]);
+        track.setNumberOfPoints(iDet, mPointsMap[a]);
       }
       mNumberOfEntriesInTracks++;
     } else {
@@ -294,8 +284,8 @@ void Stack::UpdateTrackIndex(TRefArray *detList)
 
   // First update mother ID in MCTracks
   for (Int_t i = 0; i < mNumberOfEntriesInTracks; i++) {
-    MCTrack *track = (MCTrack *) mTracks->At(i);
-    Int_t iMotherOld = track->getMotherTrackId();
+    auto& track = (*mTracks)[i];
+    Int_t iMotherOld = track.getMotherTrackId();
     mIndexIterator = mIndexMap.find(iMotherOld);
     if (mIndexIterator == mIndexMap.end()) {
       if (mLogger) {
@@ -303,7 +293,7 @@ void Stack::UpdateTrackIndex(TRefArray *detList)
       }
       Fatal("Stack::UpdateTrackIndex", "Track index not found in map");
     }
-    track->SetMotherTrackId((*mIndexIterator).second);
+    track.SetMotherTrackId((*mIndexIterator).second);
   }
 
   if (fDetList == nullptr) {
@@ -357,8 +347,8 @@ void Stack::Reset()
   while (!mStack.empty()) {
     mStack.pop();
   }
-  mParticles->Clear();
-  mTracks->Clear();
+  mParticles.clear();
+  mTracks->clear();
   mPointsMap.clear();
 }
 
@@ -367,7 +357,8 @@ void Stack::Register()
   // LOG(INFO) << this << " register in "
   //   << FairGenericRootManager::Instance() << " mTracks: " <<  mTracks << std::endl;
 
-  FairGenericRootManager::Instance()->Register("MCTrack", "Stack", mTracks, kTRUE);
+  //  FairGenericRootManager::Instance()->Register("MCTrack", "Stack", mTracks, kTRUE);
+  FairRootManager::Instance()->RegisterAny("MCTrack", mTracks, kTRUE);
 }
 
 void Stack::Print(Int_t iVerbose) const
@@ -376,8 +367,8 @@ void Stack::Print(Int_t iVerbose) const
   cout << "              Total number of particles  = " << mNumberOfEntriesInParticles << endl;
   cout << "              Number of tracks in output = " << mNumberOfEntriesInTracks << endl;
   if (iVerbose) {
-    for (Int_t iTrack = 0; iTrack < mNumberOfEntriesInTracks; iTrack++) {
-      ((MCTrack *) mTracks->At(iTrack))->Print(iTrack);
+    for (auto& track : *mTracks) {
+      track.Print();
     }
   }
 }
@@ -431,7 +422,7 @@ TParticle *Stack::GetParticle(Int_t trackID) const
     }
     Fatal("Stack::GetParticle", "Index out of range");
   }
-  return (TParticle *) mParticles->At(trackID);
+  return (TParticle *) &mParticles[trackID];
 }
 
 void Stack::SelectTracks()
@@ -502,6 +493,10 @@ void Stack::SelectTracks()
 FairGenericStack *Stack::CloneStack() const
 {
   return new o2::Data::Stack(*this);
+}
+
+TClonesArray* Stack::GetListOfParticles() {
+  LOG(FATAL) << "GetListOfParticles is not available in o2::Stack; Use o2::Stack::getParticles()" << FairLogger::endl;
 }
 
 ClassImp(o2::Data::Stack)
